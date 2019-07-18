@@ -1,0 +1,141 @@
+---
+title: "EDA and modelling intro"
+author: "Neil Rankin"
+date: "30/06/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r load_data}
+df <- readRDS(file = "data/processed/processed_data.RDS")
+```
+
+## Start looking at the data
+
+You can also embed plots, for example the ones we did for comms:
+
+```{r comm, echo=FALSE}
+ggplot(data = df) + 
+  geom_bar(mapping = aes(x = com_score))
+
+ggplot(data = df) + 
+  geom_bar(mapping = aes(x = com_score, fill = gender))
+
+ggplot(data = df) + 
+  geom_bar(mapping = aes(x = com_score, fill = gender), position = "dodge")
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+
+
+### Financial situation
+
+Let's spend some time looking at how people perceive their financial situation. There are two questions asked about this in the 'baseline'. One asks about perceptions about their current situation, a second asks about what they think it will be like in five year's time.
+
+```{r financial_situation_table}
+
+table(df$financial_situation_now)
+
+```
+
+Hmmm, this variable is a combination of words and numbers. We'll need to sort this out.
+
+```{r financial_situation_cleanup}
+
+# use readr::parse_number
+df <- df %>% 
+  mutate(fin_situ_now = parse_number(as.character(financial_situation_now))) %>% 
+  mutate(fin_situ_future = parse_number(as.character(financial_situation_5years))) %>% 
+  mutate(fin_situ_change = fin_situ_future - fin_situ_now)
+
+
+# then look at table again
+table(df$fin_situ_now)
+
+
+```
+
+What we probably want to do to improve the workflow is actually to put this variable creation earlier in the pipeline (in the `ix_intro_data_wrangling_script.R`). But let's just wait a bit until we've looked a bit closer at these variables.
+
+```{r financial_situation_vis1}
+
+ggplot(data = df) + 
+  geom_bar(mapping = aes(x = fin_situ_now))
+
+
+ggplot(data = df) + 
+  geom_point(mapping = aes(x = fin_situ_now, y = fin_situ_change))
+
+# hmm doesn't look right
+ggplot(data = df) + 
+  geom_jitter(mapping = aes(x = fin_situ_now, y = fin_situ_change))
+
+# can also 'facet'
+
+
+ggplot(data = df) + 
+  geom_bar(mapping = aes(x = fin_situ_now)) + 
+  facet_wrap(~fin_situ_future)
+
+```
+Think carefully about this variable. What are the 'contraints' you have placed on the variable through its construction? What else can you see from these plots?
+
+### Do men and women have different 'optimism' about future financial prospects?
+
+One hypothesis which might come to mind when looking at this data is that men and women might have different views on their future financial prospects? How would we test this?
+
+```{r financial_situation_gender1}
+
+ggplot(data = df) + 
+  geom_bar(mapping = aes(x = fin_situ_future, fill = gender), position = "dodge")
+
+```
+Let's look at means and medians. We can use some of our `tidyverse` tricks here.
+```{r financial_situation_gender2}
+
+fin_gender <- df %>% 
+  group_by(gender) %>% 
+  summarise(mean_fin_situ_future = mean(fin_situ_future, na.rm = TRUE), 
+            p50_fin_situ_future = median(fin_situ_future, na.rm = TRUE))
+
+fin_gender
+
+```
+
+A t-test is one way to do this quickly. We can actually do this easily with a regression.
+
+```{r financial_situation_gender3}
+
+reg1 <- lm(fin_situ_future ~ gender, data = df)
+summary(reg1)
+
+```
+
+What does this tell us? Compare it to the table.
+
+Can you think of other explanations for this?
+
+What about the financial situation now?
+
+```{r financial_situation_gender4}
+
+reg2 <- lm(fin_situ_now ~ gender, data = df)
+summary(reg2)
+
+
+reg3 <- lm(fin_situ_future ~ gender + fin_situ_now, data = df)
+summary(reg3)
+
+```
+
+Now move on to the other variables...
