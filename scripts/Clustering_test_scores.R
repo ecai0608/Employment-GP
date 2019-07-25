@@ -7,6 +7,7 @@ library(ggplot2)
 library(cluster)
 library(pastecs)
 library(corrplot)
+library(skimr)
 
 # importing all of the test scores
 CFT <- read.csv("data/raw/teaching_training_data_cft.csv")
@@ -14,6 +15,9 @@ COM <- read.csv("data/raw/teaching_training_data_com.csv")
 GRIT <- read.csv("data/raw/teaching_training_data_grit.csv")
 NUM <- read.csv("data/raw/teaching_training_data_num.csv")
 OPT <- read.csv("data/raw/teaching_training_data_opt.csv")
+
+
+skim_to_wide(OPT)
 
 # removing all NAs from the test scores
 CFT <- na.omit(CFT)
@@ -54,7 +58,9 @@ corrplot(cor(scores), method = "square")
 scores <- select(scores, -grit_score, -opt_score)
 corrplot(cor(scores), method = "square")
 
-ggplot(scores, aes(x = grit_score, y = opt_score), geom_point())
+ggplot(scores) + 
+  aes(x = com_score, y = cft_score) + 
+  geom_point()
 
 set.seed(123)
 trials <- 1:50

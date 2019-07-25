@@ -29,6 +29,10 @@ library(tidyverse)
 
 df <- read.csv("data/raw/teaching_training_data.csv")
 
+filter(df, as.Date(survey_date_month) == as.Date(dob))
+class(df$survey_date_month)
+class(df$dob)
+
 # Notice the path (it is machine independent)
 
 # Look at the data - what do we see?
@@ -82,9 +86,13 @@ ggplot(data = df) +
 
 # introducing `mutate` and some lubridate functions
 
-df <- df %>% 
-  mutate(age_at_survey = interval(dob, survey_date_month)/years(1)) %>% 
-  mutate(age = floor(age_at_survey))
+df <- df %>% filter(survey_num == 1) %>% 
+  mutate(age_at_survey = interval(dob, survey_date_month)/years(1))
+  #mutate(age = floor(age_at_survey))
+
+
+
+summary(df$age_at_survey)
 
 # see lubridate link (https://cran.r-project.org/web/packages/lubridate/vignettes/lubridate.html)
 
