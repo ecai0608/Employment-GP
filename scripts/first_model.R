@@ -213,8 +213,6 @@ confusionMatrix(hold)
 # I would not recommend running this line - the resulting tree has around 2 billion nodes. Will have to fix later.
 # fancyRpartPlot(model_tree$finalModel)
 
-# ok fuck imputation it wasn't even used in the original model lol
-
 summary(model_tree$finalModel)
 modelLookup("rpart")
 
