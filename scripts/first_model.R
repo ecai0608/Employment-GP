@@ -87,13 +87,12 @@ data <- data %>% mutate(age = interval(dob, as.Date(survey_date_month) %m-% mont
 
 # dropping irrelevant/redundant columns
 data <- data %>% select(-company_size, -survey_date_month, -job_start_date, -job_leave_date, -monthly_pay) %>% 
-  select(-financial_situation_5years, -financial_situation_now, -survey_num, -dob, -fin_situ_change, -unid)
+  select(-financial_situation_5years, -financial_situation_now, -survey_num, -dob, -fin_situ_change, -unid, -peoplelive_15plus)
 
 # parsing numeric values out of responses for numearnincome, numchildren, peoplelive
 data <- data %>% mutate(numearnincome = parse_number(as.character(numearnincome)), 
                           numchildren = parse_number(as.character(numchildren)),
-                          peoplelive = as.numeric(parse_number(as.character(peoplelive))),
-                        peoplelive_15plus = as.numeric(parse_number(as.character(peoplelive_15plus))))
+                          peoplelive = as.numeric(parse_number(as.character(peoplelive))))
 
 
 
@@ -128,10 +127,9 @@ ggplot(examineNA) +
 data <- data %>% mutate(province = as.factor(ifelse(is.na(province), "None", as.character(province)))) %>% 
   mutate(volunteer = as.factor(ifelse(is.na(volunteer), "None", as.character(volunteer)))) %>% 
   mutate(leadershiprole = as.factor(ifelse(is.na(leadershiprole), "None", as.character(leadershiprole)))) %>%
-  #mutate(peoplelive = as.factor(ifelse(is.na(peoplelive), "None", as.character(peoplelive)))) %>%
-  #mutate(peoplelive_15plus = as.factor(ifelse(is.na(peoplelive_15plus), "None", as.character(peoplelive_15plus)))) %>% 
-  #mutate(numchildren = as.factor(ifelse(is.na(numchildren), "None", as.character(numchildren)))) %>%
-  #mutate(numearnincome = as.factor(ifelse(is.na(numearnincome), "None", as.character(numearnincome)))) %>%
+  mutate(peoplelive = as.factor(ifelse(is.na(peoplelive), "None", as.character(peoplelive)))) %>%
+  mutate(numchildren = as.factor(ifelse(is.na(numchildren), "None", as.character(numchildren)))) %>%
+  mutate(numearnincome = as.factor(ifelse(is.na(numearnincome), "None", as.character(numearnincome)))) %>%
   mutate(givemoney_yes = as.factor(ifelse(is.na(givemoney_yes), "None", as.character(givemoney_yes)))) %>%
   mutate(fin_situ_now = as.factor(ifelse(is.na(fin_situ_now), "None", as.character(fin_situ_now)))) %>%
   mutate(fin_situ_future = as.factor(ifelse(is.na(fin_situ_future), "None", as.character(fin_situ_future)))) %>% 
