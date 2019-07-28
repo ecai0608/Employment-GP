@@ -1,0 +1,286 @@
+---
+title: "Employment Prediction Model "
+author: "Eric Cai, Lauren Thompson, Riya Gilja, William Carlson"
+date: "7/28/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+BACKGROUND 
+
+Given a large longitudinal dataset, including 83,270 observations, we were asked to build a machine learning model to predict who is likely to be in work so that they can intervene at ‘baseline’ [based on Survey 1]
+
+From the resulting model, we produced insights that might help the organization think about interventions.
+
+
+
+METHODS AND CODING 
+
+Install Packages and Load Libraries
+```{r}
+library(dplyr)
+library(tidyverse)
+library(pastecs)
+library(caret)
+library(lubridate)
+library(rpart)
+library(party)
+library(partykit)
+library(rattle)
+library(skimr)
+library(corrplot)
+```
+
+
+Turn Off Scientific Notation
+```{r}
+options(scipen=999)
+options(tibble.print_max = 30)
+```
+
+
+Load the Unprocessed Data
+```{r}
+df <- read.csv("data/raw/teaching_training_data.csv")
+```
+
+
+Make a Barplot to See the Data
+```{r}
+barplot(table(df$numearnincome), 
+main="Distribution of Responses for NumEarnIncome",
+xlab="Value of Responses",
+ylab="Number of Responses")
+```
+
+Looks at the distributions of responses for the variable numarnincome
+
+
+Use Readr::parse_number
+```{r}
+df <- df %>% 
+  mutate(fin_situ_now = parse_number(as.character(financial_situation_now))) %>% 
+  mutate(fin_situ_future = parse_number(as.character(financial_situation_5years))) %>% 
+  mutate(fin_situ_change = fin_situ_future - fin_situ_now)
+```
+
+
+Set Working to be a Factor
+```{r}
+df <- df %>% mutate(working = as.factor(working))
+```
+
+
+Import All the Test Scores 
+```{r}
+CFT <- read.csv("data/raw/teaching_training_data_cft.csv")
+COM <- read.csv("data/raw/teaching_training_data_com.csv")
+GRIT <- read.csv("data/raw/teaching_training_data_grit.csv")
+NUM <- read.csv("data/raw/teaching_training_data_num.csv")
+OPT <- read.csv("data/raw/teaching_training_data_opt.csv")
+```
+
+
+Remove All NAs from Test Scores
+```{r}
+CFT <- na.omit(CFT)
+COM <- na.omit(COM)
+GRIT <- na.omit(GRIT)
+NUM <- na.omit(NUM)
+OPT <- na.omit(OPT)
+```
+
+
+Remove All Duplicate Entries Based off of Unique Identifiers
+```{r}
+CFT <- distinct(CFT, unid, .keep_all = TRUE)
+COM <- distinct(COM, unid, .keep_all = TRUE)
+GRIT <- distinct(GRIT, unid, .keep_all = TRUE)
+NUM <- distinct(NUM, unid, .keep_all = TRUE)
+OPT <- distinct(OPT, unid, .keep_all = TRUE)
+
+df <- df %>% left_join(CFT, by = "unid") %>% select(-X.x, -X.y) %>% 
+  left_join(COM, by = "unid") %>% select(-X) %>% 
+  left_join(GRIT, by = "unid") %>% select(-X) %>% 
+  left_join(NUM, by = "unid") %>% select(-X) %>% 
+  left_join(OPT, by = "unid") %>% select(-X)
+
+df <- df %>% mutate(cft_score = as.factor(cft_score)) %>% 
+  mutate(com_score = as.factor(com_score)) %>% 
+  mutate(grit_score = as.factor(grit_score)) %>% 
+  mutate(num_score = as.factor(num_score)) %>% 
+  mutate(opt_score = as.factor(opt_score))
+```
+
+
+Extracting the Relevant Data, Dropping the Redundant Columns 
+```{r}
+data <- filter(df, survey_num == 1) %>% # look only at the first survey
+  distinct(unid, .keep_all = TRUE) %>% # remove the duplicates for each unique identifier
+  filter(unid != 17) # removed one entry where a woman entered survey date for her date of birth
+
+
+# calculating the baseline age and truncating to a whole number
+data <- data %>% mutate(age = interval(dob, as.Date(survey_date_month) %m-% months(4))/years(1)) %>% 
+  mutate(age = floor(age))
+
+
+# dropping irrelevant/redundant columns
+data <- data %>% select(-company_size, -survey_date_month, -job_start_date, -job_leave_date, -monthly_pay) %>% 
+  select(-financial_situation_5years, -financial_situation_now, -survey_num, -dob, -fin_situ_change, -unid, -peoplelive_15plus)
+
+# parsing numeric values out of responses for numearnincome, numchildren, peoplelive
+data <- data %>% mutate(numearnincome = parse_number(as.character(numearnincome)), 
+                        numchildren = parse_number(as.character(numchildren)),
+                        peoplelive = as.numeric(parse_number(as.character(peoplelive))))
+```
+
+
+Examine NA Trends in All Features 
+```{r}
+total_na <- rowSums(is.na(data))
+# data <- data %>% cbind(total_na)
+data <- data %>% cbind(total_na) %>% mutate(total_na = as.factor(ifelse(total_na == 0, 0, 1)))
+
+names(data)
+
+examineNA <- mutate(data, work_true = ifelse(as.logical(working), 1, 0), work_false = ifelse(as.logical(working), 0, 1)) %>% 
+  group_by(numearnincome) %>% summarise(total_true = sum(work_true), total_false = sum(work_false)) %>% 
+  mutate(ratio = total_true/(total_false + total_true))
+examineNA
+
+```
+
+
+Looking at the Trends in Data in a Graphical Representation
+```{r} 
+ggplot(data) +
+  aes(x = numearnincome) + 
+  geom_bar()
+
+
+ggplot(examineNA) + 
+  aes(x = numearnincome, y = ratio) + 
+  geom_point()+
+  ggtitle("Probability/Ratio of NA on unemployment likelihood")
+```
+
+
+Analysis of NA Values 
+```{r}
+# FEATURES: province, volunteer, leadershiprole, peoplelive, numchildren, numearnincome, givemoney_yes, fin_situ_'s
+data <- data %>% mutate(province = as.factor(ifelse(is.na(province), "None", as.character(province)))) %>% 
+  mutate(volunteer = as.factor(ifelse(is.na(volunteer), "None", as.character(volunteer)))) %>% 
+  mutate(leadershiprole = as.factor(ifelse(is.na(leadershiprole), "None", as.character(leadershiprole)))) %>%
+  mutate(peoplelive = as.factor(ifelse(is.na(peoplelive), "None", as.character(peoplelive)))) %>%
+  mutate(numchildren = as.factor(ifelse(is.na(numchildren), "None", as.character(numchildren)))) %>%
+  mutate(numearnincome = as.factor(ifelse(is.na(numearnincome), "None", as.character(numearnincome)))) %>%
+  mutate(givemoney_yes = as.factor(ifelse(is.na(givemoney_yes), "None", as.character(givemoney_yes)))) %>%
+  mutate(fin_situ_now = as.factor(ifelse(is.na(fin_situ_now), "None", as.character(fin_situ_now)))) %>%
+  mutate(fin_situ_future = as.factor(ifelse(is.na(fin_situ_future), "None", as.character(fin_situ_future)))) %>% 
+  mutate(cft_score = as.factor(ifelse(is.na(cft_score), "None", as.character(cft_score)))) %>% 
+  mutate(com_score = as.factor(ifelse(is.na(com_score), "None", as.character(com_score)))) %>% 
+  mutate(num_score = as.factor(ifelse(is.na(num_score), "None", as.character(num_score)))) %>% 
+  mutate(opt_score = as.factor(ifelse(is.na(opt_score), "None", as.character(opt_score))))
+
+
+data <- select(data, -grit_score)
+```
+
+Individuals that do not respond to survey questions seem to be more liekly to not work. 
+
+
+
+Training the Model 
+```{r}
+skim_to_wide(data)
+
+set.seed(13)
+partition <- createDataPartition(data$working, p = 0.8, list = FALSE)
+# sorry the naming is very poor here
+train <- data[partition, ]
+test <- data[-partition, ]
+
+```
+
+```{r}
+# UPSAMPLING TO BALANCE WORKING CLASSES
+train_employed = filter(train, working == TRUE)
+train_unemployed = filter(train, working == FALSE)
+
+nrow(train_employed)
+nrow(train_unemployed)
+difference <- nrow(train_unemployed) - nrow(train_employed)
+difference
+
+upsamples <- train_employed[sample(nrow(train_employed), nrow(train_employed), replace = TRUE),]
+
+train_employed <- rbind(train_employed, upsamples)
+train <- rbind(train, train_employed)
+
+
+trControl <- trainControl(method = "cv", number = 10, verboseIter = TRUE)
+model_tree <- train(working ~ ., train, method = "rpart", na.action = na.pass, 
+                    trControl = trControl, metric = "Kappa")
+
+
+test_employed = filter(test, working == TRUE)
+test_unemployed = filter(test, working == FALSE)
+nrow(test_employed)
+nrow(test_unemployed)
+difference <- nrow(test_unemployed) - nrow(test_employed)
+difference
+
+
+predictions <- predict(model_tree, test, na.action = na.rpart)
+```
+
+
+The Confusion Matrix 
+```{r}
+hold <- table(predictions, test$working)
+confusionMatrix(hold)
+```
+
+
+Decision Tree 
+```{r}
+
+fancyRpartPlot(model_tree$finalModel)
+
+#summary(model_tree$finalModel)
+modelLookup("rpart")
+
+names(data)
+skim_to_wide(data)
+```
+
+
+INSIGHTS 
+
+1. When analyzing the NA values and trends, individuals that do not respond to the survey questions seem to be more likely to not work. We can represent this in our dataset by adding additional features to represent when an individual left a question blank. This allows us not only to reduce the sparseness of the data set (which can reduce the performance of our model), but it also does so without reducing the quantity of data that we have.
+
+2. There is a downside of turning turning all the variables into factors. The numerical features that should be considered includes: peoplelive, numchildren, numearnincome, fin_situ_now, fin_situ_future. Both the peoplelive and numearnincome variables need to be clustered and categorized. 
+
+3. On a related note, since so many of the features were of different types, we decided to use a non-parametric model (decision tree) instead of a parametric one.
+
+4. This model has poor specificity; therefore, the model predicts FALSE too much, even when “working” is TRUE.
+
+5. We should consider what a proper evaluation of performance for this model would look like. In the case of this specific model, our intent is to determine when to intervene at a baseline. Intuitively, it is much worse to not intervene when we should have, than to intervene when doing so is unnecessary. As such, we should prioritize sensitivity over specificity.
+
+
+
+SUGGESTIONS 
+
+1. Standardize the “type” of question response. Features like peoplelive, peoplelive_15plus, and numearnincome can all be treated as numerics, but numchildren cannot, because it only allows for 5 possible answers: 0, 1, 2, 3, or 4 or more. This makes it difficult to compare some of the features.
+
+2. In the survey, it would be useful to make certain parts mandatory. For example, right now gender is mostly filled out, however, other areas of interest such as income are required for proper analysis of the data. Without it, we are making assumptions and are working with incomplete/inaccurate data. 
+
+3. It would be interesting to see a section of questions on the survey regarding people’s willingness/eagerness to look for a job. These sorts of questions can be based on a likert scale and help measure the difference between effort put in vs. likelihood of employment vs. actual employment. This sort of data will prove useful for explaining the cause of the results. 
+
+4. Another interesting factor the survey might measure is the industry the person wants to enter and previous industry background. This sort of information could provide valuable insights into what fields have high barriers to entry / what can be done to lower them if necessary. Additionally, this can help for future models that try to match people based on their background to new fields of employment. 
+
+
