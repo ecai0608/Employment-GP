@@ -1,0 +1,387 @@
+---
+title: "Employment Prediction Model "
+author: "Eric Cai, Lauren Thompson, Riya Gilja, William Carlson"
+date: "7/28/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# BACKGROUND 
+
+Given a large longitudinal dataset, including 83,270 observations, we were asked to build a machine learning model to predict who is likely to be in work so that they can intervene at ‘baseline’ [based on Survey 1]
+
+The data collected at 'baseline' included:
+
+- gender 
+
+- date of birth 
+
+- province where the respondent was living 
+
+- whether or not the respondent did any volunteer work
+
+- whether or not the respondent had any leadership roles 
+
+- how many people live together in the household
+
+- how many people living together in the household were older than 15
+
+- number of children in the household 
+
+- number of people who earn an income in the household 
+
+- whether or not the household receives any grants or income
+
+- how the respondent perceives their current financial situation 
+
+- how the respondent thinks their financial situation will be in 5 years time
+
+- whether or not the respondent gives money to other people
+
+
+We conducted a decision tree to predict who is likely to work. From the resulting model, we produced insights that might help the organization think about interventions.
+
+
+# METHODOLOGY AND CODING 
+
+### Install Packages and Load Libraries
+```{r, results = "hide"}
+library(dplyr)
+library(tidyverse)
+library(pastecs)
+library(caret)
+library(lubridate)
+library(rpart)
+library(party)
+library(partykit)
+library(rattle)
+library(skimr)
+library(corrplot)
+library(gridExtra)
+```
+
+### Turn Off Scientific Notation
+```{r}
+options(scipen=999)
+options(tibble.print_max = 30)
+```
+
+Turning off the scientific notation allows for all the numbers to be read easier from the original data script when they get printed out. 
+
+### Loading The Unprocessed Data
+```{r}
+df <- read.csv("data/raw/teaching_training_data.csv")
+
+# import all of the test scores
+CFT <- read.csv("data/raw/teaching_training_data_cft.csv")
+COM <- read.csv("data/raw/teaching_training_data_com.csv")
+GRIT <- read.csv("data/raw/teaching_training_data_grit.csv")
+NUM <- read.csv("data/raw/teaching_training_data_num.csv")
+OPT <- read.csv("data/raw/teaching_training_data_opt.csv")
+
+# remove all duplicate entries based off of unique identifiers
+CFT <- distinct(CFT, unid, .keep_all = TRUE)
+COM <- distinct(COM, unid, .keep_all = TRUE)
+GRIT <- distinct(GRIT, unid, .keep_all = TRUE)
+NUM <- distinct(NUM, unid, .keep_all = TRUE)
+OPT <- distinct(OPT, unid, .keep_all = TRUE)
+
+# joining test score data to the dataframe
+df <- df %>% left_join(CFT, by = "unid") %>% select(-X.x, -X.y) %>% 
+  left_join(COM, by = "unid") %>% select(-X) %>% 
+  left_join(GRIT, by = "unid") %>% select(-X) %>% 
+  left_join(NUM, by = "unid") %>% select(-X) %>% 
+  left_join(OPT, by = "unid") %>% select(-X)
+
+# representing the test score data as a factor
+df <- df %>% mutate(cft_score = as.factor(cft_score)) %>% 
+  mutate(com_score = as.factor(com_score)) %>% 
+  mutate(grit_score = as.factor(grit_score)) %>% 
+  mutate(num_score = as.factor(num_score)) %>% 
+  mutate(opt_score = as.factor(opt_score))
+```
+
+### Looking At The Data
+Before we process the data or perform any feature engineering, let's take a look at the data first.
+```{r}
+skim_to_wide(df)
+```
+
+As we can see, almost all of the features are factors. This works for some of the features like givemoney_yes, but not so much for some of the others.
+
+```{r}
+barplot(table(df$numearnincome), 
+main="Distribution of Responses for NumEarnIncome",
+xlab="Value of Responses",
+ylab="Number of Responses")
+```
+
+Take numearnincome for example - clearly the distribution for this feature resembles that of a numeric one much more closely. In fact, we can see that our data for this feature has no response containing 13. If we were to treat this feature as a factor, we believe our model would think that 13 is not a possible answer.
+
+There's also another problem with our unprocessed data, which we can see pretty clearly if we look at the responses for numchildren.
+
+```{r}
+barplot(table(df$numchildren), 
+main="Distribution of Responses for NumChildren",
+xlab="Value of Responses",
+ylab="Number of Responses")
+```
+
+We can see pretty clearly here that the responses for numchildren have multiple responses corresponding to the same thing. This can be done pretty easily by parsing the numbers out of the responses.
+
+### Processing the Data
+```{r}
+# parsing numbers out of features that should be represented as numerics (but are represented in strings)
+df <- df %>% 
+  mutate(fin_situ_now = parse_number(as.character(financial_situation_now))) %>% 
+  mutate(fin_situ_future = parse_number(as.character(financial_situation_5years))) %>% 
+  mutate(numearnincome = parse_number(as.character(numearnincome)), 
+         numchildren = parse_number(as.character(numchildren)),
+         peoplelive = as.numeric(parse_number(as.character(peoplelive))))
+
+
+# Set Working to be a Factor
+df <- df %>% mutate(working = as.factor(working))
+```
+
+
+### Extracting the Relevant Data, Dropping the Redundant Columns
+```{r}
+data <- filter(df, survey_num == 1) %>% # look only at the first survey
+  distinct(unid, .keep_all = TRUE) %>% # remove the duplicates for each unique identifier
+  filter(unid != 17) # removed one entry where a woman entered survey date for her date of birth
+
+
+# calculating the baseline age and truncating to a whole number
+data <- data %>% mutate(age = interval(dob, as.Date(survey_date_month) %m-% months(4))/years(1)) %>% 
+  mutate(age = floor(age))
+
+
+# dropping irrelevant/redundant columns
+data <- data %>% select(-company_size, -survey_date_month, -job_start_date, -job_leave_date, -monthly_pay) %>% 
+  select(-financial_situation_5years, -financial_situation_now, -survey_num, -dob, -unid, -peoplelive_15plus)
+```
+
+In order to extract the relevant data, we needed to drop the redundant columns. In order to do this, we removed the duplicates for each unique identifer and one entry where a woman entered the survey date for her own date of birth. Then we used this information to calculate the baseline age and turned the age into a whole number. We dropped the following variables because we consider them to be irrelevant and/or redundant to what the aim of this project is: company size, survey date month, job start date, job leave date, monthly pay, finanical situation now and in 5 years, survey num, date of birth, unique ID, and the amount of people over the age of 15 living in the household. 
+
+
+### Examine NA Trends in All Features
+Right of the bat, we can see that the current dataset is extremely sparse, with well over half of the entries in the dataframe being NAs. But before we decide to ignore the NAs, or omit them completely from the dataset, let's see if we can find a trend in the NAs themselves.
+```{r}
+examineNA_givemoney <- mutate(data, work_true = ifelse(as.logical(working), 1, 0), work_false = ifelse(as.logical(working), 0, 1)) %>% 
+  group_by(givemoney_yes) %>% summarise(total_true = sum(work_true), total_false = sum(work_false)) %>% 
+  mutate(probability = total_true/(total_false + total_true))
+
+examineNA_givemoney <- mutate(examineNA_givemoney, givemoney_yes = ifelse(is.na(givemoney_yes), "None", givemoney_yes))
+
+givemoney_plot <- ggplot(examineNA_givemoney) + 
+  aes(x = givemoney_yes, y = probability) + 
+  geom_point()
+givemoney_plot
+```
+
+This is interesting! We can see pretty clearly that individuals who responded yes to this question are more likely to be employed than those who responded no. But, we can also see that those who didn't respond at all had a much lower likelihood to be employed than those who answered the question, regardless of their answer.
+In fact, this trend seems to hold for many of the features in the dataset:
+
+```{r}
+examineNA_numchildren <- mutate(data, work_true = ifelse(as.logical(working), 1, 0), work_false = ifelse(as.logical(working), 0, 1)) %>% 
+  group_by(numchildren) %>% summarise(total_true = sum(work_true), total_false = sum(work_false)) %>% 
+  mutate(probability = total_true/(total_false + total_true))
+examineNA_numchildren <- mutate(examineNA_numchildren, numchildren = ifelse(is.na(numchildren), "None", numchildren))
+
+
+examineNA_com_score <- mutate(data, work_true = ifelse(as.logical(working), 1, 0), work_false = ifelse(as.logical(working), 0, 1)) %>% 
+  group_by(com_score) %>% summarise(total_true = sum(work_true), total_false = sum(work_false)) %>% 
+  mutate(probability = total_true/(total_false + total_true))
+examineNA_com_score <- mutate(examineNA_com_score, com_score = ifelse(is.na(com_score), "None", com_score))
+
+
+examineNA_province <- mutate(data, work_true = ifelse(as.logical(working), 1, 0), work_false = ifelse(as.logical(working), 0, 1)) %>% 
+  group_by(province) %>% summarise(total_true = sum(work_true), total_false = sum(work_false)) %>% 
+  mutate(probability = total_true/(total_false + total_true))
+examineNA_province <- mutate(examineNA_province, province = ifelse(is.na(province), "None", province))
+
+
+
+numchildren_plot <- ggplot(examineNA_numchildren) + 
+  aes(x = numchildren, y = probability) + 
+  geom_point()
+
+province_plot <- ggplot(examineNA_province) + 
+  aes(x = province, y = probability) + 
+  geom_point()
+
+com_score_plot <- ggplot(examineNA_com_score) + 
+  aes(x = com_score, y = probability) + 
+  geom_point()
+
+grid.arrange(givemoney_plot, numchildren_plot, province_plot, com_score_plot, ncol = 2)
+```
+
+This seems to suggest that in general, individuals who don't answer all of the question in the survey tend to have a lower likelihood of being employed. We can verify this directly by splitting the individuals into two groups: those who answered every question and those who did not.
+To do this, we can add an additional feature (total_na) that keeps track of whether or not an individual answered every question. In our case, total_na is 0 when the individual did respond to every question, and 1 otherwise.
+
+```{r}
+total_na <- rowSums(is.na(data))
+data <- data %>% cbind(total_na) %>% mutate(total_na = as.factor(ifelse(total_na == 0, 0, 1)))
+
+test <- glm(working ~ total_na, data, family = "binomial")
+summary(test)
+```
+
+We can see here that total_na has a very high significance level when used to predict employment! In particular, we can treat all of the NAs as additional information, rather than a lack thereof. Even though they aren't visualized here, this trend holds true for most other features in the dataset as well. 
+
+# Replacing NAs with "None" as a Factor Level
+```{r}
+# FEATURES: province, volunteer, leadershiprole, peoplelive, numchildren, numearnincome, givemoney_yes, fin_situ_'s
+data <- data %>% mutate(province = as.factor(ifelse(is.na(province), "None", as.character(province)))) %>% 
+  mutate(volunteer = as.factor(ifelse(is.na(volunteer), "None", as.character(volunteer)))) %>% 
+  mutate(leadershiprole = as.factor(ifelse(is.na(leadershiprole), "None", as.character(leadershiprole)))) %>%
+  # mutate(peoplelive = as.factor(ifelse(is.na(peoplelive), "None", as.character(peoplelive)))) %>%
+  mutate(numchildren = as.factor(ifelse(is.na(numchildren), "None", as.character(numchildren)))) %>%
+  # mutate(numearnincome = as.factor(ifelse(is.na(numearnincome), "None", as.character(numearnincome)))) %>%
+  mutate(givemoney_yes = as.factor(ifelse(is.na(givemoney_yes), "None", as.character(givemoney_yes)))) %>%
+  mutate(fin_situ_now = as.factor(ifelse(is.na(fin_situ_now), "None", as.character(fin_situ_now)))) %>%
+  mutate(fin_situ_future = as.factor(ifelse(is.na(fin_situ_future), "None", as.character(fin_situ_future)))) %>% 
+  mutate(cft_score = as.factor(ifelse(is.na(cft_score), "None", as.character(cft_score)))) %>% 
+  mutate(com_score = as.factor(ifelse(is.na(com_score), "None", as.character(com_score)))) %>% 
+  mutate(num_score = as.factor(ifelse(is.na(num_score), "None", as.character(num_score)))) %>% 
+  mutate(opt_score = as.factor(ifelse(is.na(opt_score), "None", as.character(opt_score))))
+```
+
+You might be wondering why two of these line are commented out! As it turns out, there is a downside to this procedure - it restricts any feature that we process this way to be a factor. But as we saw earlier, some of our features need to be represented as numerics, and so we can't process those features (peoplelive and numearnincome) that way. This means that for the remaining numeric features, we'll have to resort to imputation!
+
+### Splitting the Data into Training and Test Splits
+
+Before we get to imputation, we need to split our data into test and train splits. K-NN imputation, the method that the caret package provides, looks at the nearest neighbors for each NA entry, which can result in data snooping if we impute the training data with the test data. In addition, since we're using a nearest neighbors algorithm to perform our imputation, we will need to center and scale our data. Doing so with the training and test data combined can also result in data snooping.
+
+We're also going to remove all of the entries where either gender or age was left unanswered. This will prevent issues with imputation where all of the numeric features are NA at minimal cost - doing so removes less than 200 entries from a dataset of over 50000.
+```{r}
+data <- filter(data, !is.na(gender), !is.na(age))
+```
+
+# Splitting the Data
+```{r}
+set.seed(13)
+partition <- createDataPartition(data$working, p = 0.8, list = FALSE)
+train <- data[partition, ]
+test <- data[-partition, ]
+
+```
+
+
+# Storing the Means and Variances of the Features to be Imputed
+Since we're only imputing the training data and not the test data, we need to be able to reverse the scaling done to our numeric features by the imputation so that they're on the same scale as the corresponding features in our test data. We can do this pretty easily by storing the means and variances of the features to be imputed, and using them to reverse the scaling once the imputation is done.
+
+```{r}
+# storing the means and variances of numearnincome and peoplelive to reverse the scaling done by knnImpute
+nei_mean <- mean(na.omit(train$numearnincome))
+nei_var <- var(na.omit(train$numearnincome))
+
+pl_mean <- mean(na.omit(train$peoplelive))
+pl_var <- var(na.omit(train$peoplelive))
+```
+
+Now we can impute the data!
+
+```{r}
+# imputing the data
+impute_train <- preProcess(select(train, -working), "knnImpute")
+train <- predict(impute_train, train)
+
+# rescaling the data
+train <- train %>% mutate(numearnincome = (numearnincome*sqrt(nei_var)) + nei_mean,
+                       peoplelive = (peoplelive*sqrt(pl_var)) + pl_mean)
+
+# rounding the data to integer values
+train <- train %>% mutate(numearnincome = round(numearnincome),
+                          peoplelive = round(peoplelive))
+```
+
+
+# Creating Upsampled Training Data
+It's worth noting that the working labels are extremely unbalanced. We can attempt to resolve this by upsampling our data so that our data has the same number of samples for each class.
+```{r}
+
+train_employed = filter(train, working == TRUE)
+train_unemployed = filter(train, working == FALSE)
+
+nrow(train_employed)
+nrow(train_unemployed)
+difference <- nrow(train_unemployed) - nrow(train_employed)
+difference
+
+upsamples <- train_employed[sample(nrow(train_employed), nrow(train_employed), replace = TRUE),]
+
+train_employed <- rbind(train_employed, upsamples)
+train_upsampled <- rbind(train, train_employed)
+```
+
+### Training A Model
+
+All that's left to do is to train our model. Here, we train two separate models - one with the original imputed training data, and one with an upsampled data set.
+
+```{r}
+trControl <- trainControl(method = "cv", number = 10, verboseIter = TRUE)
+
+# without upsampling
+model_tree <- train(working ~ ., train, method = "rpart", na.action = na.pass, 
+                    trControl = trControl, metric = "Kappa")
+
+# with upsampling
+model_tree_upsampled <- train(working ~ ., train, method = "rpart", na.action = na.pass, 
+                    trControl = trControl, metric = "Kappa")
+
+
+# predicting using both models
+predictions <- predict(model_tree, test, na.action = na.rpart)
+predictions_upsampled <- predict(model_tree, test, na.action = na.rpart)
+```
+
+# Confusion Matrix
+```{r}
+# comparing performance of both models
+hold <- table(predictions, test$working)
+confusionMatrix(hold)
+
+hold_upsampled <- table(predictions, test$working)
+confusionMatrix(hold_upsampled)
+```
+
+In general, VERY BAD SPECIFICITY - the model predicts FALSE too much, even when "working" is TRUE. However, the accuracy is pretty solid at 77.8 percent. 
+
+
+### Decision Tree
+```{r} 
+fancyRpartPlot(model_tree$finalModel)
+```
+
+
+# INSIGHTS 
+
+1. When analyzing the NA values and trends, individuals that do not respond to the survey questions seem to be more likely to not work. We can represent this in our dataset by adding additional features to represent when an individual left a question blank. This allows us not only to reduce the sparseness of the data set (which can reduce the performance of our model), but it also does so without reducing the quantity of data that we have.
+
+2. There is a downside of turning turning all the variables into factors. The numerical features that should be considered includes: peoplelive, numchildren, numearnincome, fin_situ_now, fin_situ_future. Both the peoplelive and numearnincome variables need to be clustered and categorized. 
+
+3. On a related note, since so many of the features were of different types, we decided to use a non-parametric model (decision tree) instead of a parametric one.
+
+4. This model has poor specificity; therefore, the model predicts FALSE too much, even when “working” is TRUE.
+
+5. We should consider what a proper evaluation of performance for this model would look like. In the case of this specific model, our intent is to determine when to intervene at a baseline. Intuitively, it is much worse to not intervene when we should have, than to intervene when doing so is unnecessary. As such, we should prioritize sensitivity over specificity.
+
+
+
+# SUGGESTIONS 
+
+1. Standardize the “type” of question response. Features like peoplelive, peoplelive_15plus, and numearnincome can all be treated as numerics, but numchildren cannot, because it only allows for 5 possible answers: 0, 1, 2, 3, or 4 or more. This makes it difficult to compare some of the features.
+
+2. In the survey, it would be useful to make certain parts mandatory. For example, right now gender is mostly filled out, however, other areas of interest such as income are required for proper analysis of the data. Without it, we are making assumptions and are working with incomplete/inaccurate data. 
+
+3. It would be interesting to see a section of questions on the survey regarding people’s willingness/eagerness to look for a job. These sorts of questions can be based on a likert scale and help measure the difference between effort put in vs. likelihood of employment vs. actual employment. This sort of data will prove useful for explaining the cause of the results. 
+
+4. Another interesting factor the survey might measure is the industry the person wants to enter and previous industry background. This sort of information could provide valuable insights into what fields have high barriers to entry / what can be done to lower them if necessary. Additionally, this can help for future models that try to match people based on their background to new fields of employment. 
+
+
